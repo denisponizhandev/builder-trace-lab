@@ -1,1 +1,2 @@
-# builder-trace-lab
+cargo build
+cargo run -p btl

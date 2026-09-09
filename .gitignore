@@ -1,0 +1,22 @@
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# Foundry
+contracts/cache/
+contracts/out/
+contracts/broadcast/*/31337/
+
+# Rust
+target/
+**/*.rs.bk
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# DB local
+*.db
+docker/volumes/

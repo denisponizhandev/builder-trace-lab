@@ -1,0 +1,11 @@
+[package]
+name = "btl"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "btl"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
