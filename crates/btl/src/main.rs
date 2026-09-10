@@ -1,5 +1,13 @@
+use std::error::Error;
+use dotenvy::dotenv;
+
 use btl::App;
 
-fn main() {
-    App::new().start();
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    dotenv().ok();
+
+    App::new().await?.start().await?;
+
+    Ok(())
 }
