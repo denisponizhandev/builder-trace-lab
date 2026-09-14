@@ -1,9 +1,17 @@
 use std::error::Error;
 use sqlx::postgres::{PgPoolOptions, PgPool};
+use tokio::sync::mpsc;
+use tokio::signal;
 
 pub mod config;
+pub mod pipeline;
 
 use config::GlobalConfig;
+use pipeline::message::PipelineMessage;
+use pipeline::ingest::run_ingest;
+use pipeline::processor::run_processor;
+
+const CHANNEL_CAPACITY: usize = 16; 
 
 pub struct App {
     name: String,
@@ -28,12 +36,38 @@ impl App {
 
     pub async fn start(&self) -> Result<(), Box<dyn Error>>{
 
-        let one: i32 = sqlx::query_scalar("SELECT 1")
-            .fetch_one(&self.pool)
-            .await?;
+        println!("pipeline started");
 
-        println!("db is connected, smoke ok: {}", one);
-        println!("app {} has started!", &self.name);
+        let (tx, rx) = mpsc::channel::<PipelineMessage>(CHANNEL_CAPACITY);
+
+        let ingest_handle = tokio::spawn(run_ingest(tx));
+        let processor_handle = tokio::spawn(run_processor(rx, self.pool.clone()));
+
+        tokio::select! {
+            _ = signal::ctrl_c() => {
+                println!("shutdown requested");
+                ingest_handle.abort();
+            }
+        }
+
+        processor_handle.await??;
+
+        match ingest_handle.await {
+            Ok(Ok(())) => {
+                println!("ingest stopped cleanly");
+            }
+            Ok(Err(e)) => {
+                eprintln!("ingest returned error: {}", e);
+            }
+            Err(join_err) if join_err.is_cancelled() => {
+                println!("ingest cancelled (expected on shutdown)");
+            }
+            Err(join_err) => {
+                eprintln!("ingest task failed: {}", join_err);
+            }
+        }
+
+        println!("shutdown complete");
 
         Ok(())
     }
