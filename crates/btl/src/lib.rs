@@ -8,6 +8,8 @@ use axum;
 pub mod config;
 pub mod pipeline;
 pub mod http;
+pub mod storage;
+pub mod domain;
 
 use config::GlobalConfig;
 
@@ -15,7 +17,8 @@ use http::router::build_router;
 use http::state::HttpState;
 
 use pipeline::message::PipelineMessage;
-use pipeline::processor::run_processor;
+use pipeline::processor::Processor;
+use storage::bundles::BundleRepository;
 
 const CHANNEL_CAPACITY: usize = 16; 
 
@@ -54,14 +57,17 @@ impl App {
             axum::serve(listener, router).await
         });
 
-        let processor_handle = tokio::spawn(
-            run_processor(
-                rx, 
-                self.pool.clone(), 
-                self.config.simulation_is_on, 
-                self.config.sleep_delay_ms
-            )
-        );
+        let bundle_repo = BundleRepository::new(self.pool.clone());
+        let processor = Processor::new(bundle_repo);
+
+        let simulation_is_on = self.config.simulation_is_on;
+        let sleep_delay_ms = self.config.sleep_delay_ms;
+
+        let processor_handle = tokio::spawn(async move {
+            processor
+                .run_processor(rx, simulation_is_on, sleep_delay_ms)
+                .await
+        });
 
         tokio::select! {
             _ = signal::ctrl_c() => {

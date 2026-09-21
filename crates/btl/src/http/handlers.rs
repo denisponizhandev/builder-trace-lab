@@ -2,11 +2,11 @@ use axum::{extract::State, Json, http::StatusCode};
 use chrono::{Utc};
 
 use crate::pipeline::message::{PipelineMessage, AcceptedBundle};
+use crate::domain::bundle::{parse_hex_u64, lab_bundle_hash};
 
 use super::state::HttpState;
 use super::jsonrpc_types::{JsonRpcRequest, SendBundleParams, JsonRpcSuccessResponse, SendBundleResult, JsonRpcErrorResponse, JsonRpcErrorBody, SumbitOrderOutcome};
 use super::validate::{validate_eth_send_bundle, RpcReject};
-use super::parse::{parse_hex_u64, lab_bundle_hash};
 
 pub async fn eth_send_bundle(
     State(state): State<HttpState>, 
@@ -63,6 +63,7 @@ pub async fn eth_send_bundle(
         } 
     }
 
+    // should be moved to domain layer
     let bundle_hash = lab_bundle_hash(&params.txs);
     let target_block = match parse_hex_u64(&params.block_number) {
         Ok(v) => v,
