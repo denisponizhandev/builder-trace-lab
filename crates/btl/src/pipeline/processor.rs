@@ -3,7 +3,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use sqlx::PgPool;
 
-use crate::pipeline::message::PipelineMessage;
+use crate::pipeline::message::{PipelineMessage, AcceptedBundle};
 
 #[derive(Debug, Error)] 
 pub enum ProcessorError {
@@ -11,10 +11,19 @@ pub enum ProcessorError {
     Db(#[from] sqlx::Error),
 }
 
-async fn run_test_query(pool: &PgPool) -> Result<(), ProcessorError> {
-    let i: i32 = sqlx::query_scalar("SELECT 1;").fetch_one(pool).await?;
-
-    println!("db ok: {}", i);
+async fn persist_inbound_bundle(pool: &PgPool, bundle: &AcceptedBundle) -> Result<(), ProcessorError> {
+    sqlx::query(
+        r#"
+        INSERT INTO bundles (bundle_hash, target_block, tx_count, received_at)
+        VALUES ($1, $2, $3, $4)
+        "#
+    )
+    .bind(bundle.bundle_hash())
+    .bind(bundle.target_block())
+    .bind(bundle.tx_count())
+    .bind(bundle.received_at())
+    .execute(pool)
+    .await?;
 
     Ok(())
 }
@@ -24,9 +33,8 @@ pub async fn run_processor(mut rx: mpsc::Receiver<PipelineMessage>, pool: PgPool
 
     while let Some(msg) = rx.recv().await {
         match msg {
-            PipelineMessage::Ping => {
-                println!("received {:?} from channel", msg);
-                run_test_query(&pool).await?;
+            PipelineMessage::BundleAccepted(b) => {                
+                persist_inbound_bundle(&pool, &b).await?;
             },
             PipelineMessage::Shutdown => {
                 println!("received {:?} from channel", msg);

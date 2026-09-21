@@ -3,12 +3,18 @@ use sqlx::postgres::{PgPoolOptions, PgPool};
 use tokio::sync::mpsc;
 use tokio::signal;
 
+use axum;
+
 pub mod config;
 pub mod pipeline;
+pub mod http;
 
 use config::GlobalConfig;
+
+use http::router::build_router;
+use http::state::HttpState;
+
 use pipeline::message::PipelineMessage;
-use pipeline::ingest::run_ingest;
 use pipeline::processor::run_processor;
 
 const CHANNEL_CAPACITY: usize = 16; 
@@ -40,30 +46,37 @@ impl App {
 
         let (tx, rx) = mpsc::channel::<PipelineMessage>(CHANNEL_CAPACITY);
 
-        let ingest_handle = tokio::spawn(run_ingest(tx));
+        let state = HttpState::new(tx);
+        let router = build_router(state);
+        let listener = tokio::net::TcpListener::bind(&self.config.http_bind).await?;
+        
+        let http_handle = tokio::spawn(async move {
+            axum::serve(listener, router).await
+        });
+
         let processor_handle = tokio::spawn(run_processor(rx, self.pool.clone()));
 
         tokio::select! {
             _ = signal::ctrl_c() => {
                 println!("shutdown requested");
-                ingest_handle.abort();
+                http_handle.abort();
             }
         }
 
         processor_handle.await??;
 
-        match ingest_handle.await {
+        match http_handle.await {
             Ok(Ok(())) => {
-                println!("ingest stopped cleanly");
+                println!("http stopped cleanly");
             }
             Ok(Err(e)) => {
-                eprintln!("ingest returned error: {}", e);
+                eprintln!("http returned error: {}", e);
             }
             Err(join_err) if join_err.is_cancelled() => {
-                println!("ingest cancelled (expected on shutdown)");
+                println!("http cancelled (expected on shutdown)");
             }
             Err(join_err) => {
-                eprintln!("ingest task failed: {}", join_err);
+                eprintln!("http task failed: {}", join_err);
             }
         }
 

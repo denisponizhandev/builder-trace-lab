@@ -1,0 +1,21 @@
+CREATE TABLE experiment_samples (
+    run_id                          UUID NOT NULL REFERENCES experiment_runs (run_id) ON DELETE CASCADE,
+    source                          TEXT NOT NULL CHECK (source IN('bundle', 'mempool')),
+    observed_at                     TIMESTAMPTZ NOT NULL,
+    observed_total                  BIGINT CHECK (observed_total IS NULL OR observed_total >= 0),
+    filtered_total                  BIGINT CHECK (filtered_total IS NULL OR filtered_total >= 0),
+    received_total                  BIGINT NOT NULL CHECK (received_total >= 0),
+    accepted_total                  BIGINT NOT NULL CHECK (accepted_total >= 0),
+    rejected_total                  BIGINT CHECK (rejected_total IS NULL OR rejected_total >= 0),
+    dropped_total                   BIGINT CHECK (dropped_total IS NULL OR dropped_total >= 0),
+    simulation_started_total        BIGINT NOT NULL CHECK (simulation_started_total >= 0),
+    processed_total                 BIGINT NOT NULL CHECK (processed_total >= 0),
+    infrastructure_failed_total     BIGINT NOT NULL CHECK (infrastructure_failed_total >= 0),
+    queue_depth                     INTEGER NOT NULL CHECK (queue_depth >= 0),
+    queue_capacity                  INTEGER CHECK (queue_capacity IS NULL OR queue_capacity >= 1),
+    in_flight                       INTEGER NOT NULL CHECK (in_flight >= 0),
+    result_queue_depth              INTEGER NOT NULL CHECK (result_queue_depth >= 0),
+    db_batch_size                   INTEGER CHECK (db_batch_size IS NULL OR db_batch_size >= 0),
+    process_resident_memory_bytes   BIGINT CHECK (process_resident_memory_bytes IS NULL OR process_resident_memory_bytes >= 0),
+    UNIQUE (run_id, source, observed_at)
+);
