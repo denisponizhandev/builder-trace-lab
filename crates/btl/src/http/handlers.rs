@@ -1,5 +1,5 @@
 use axum::{extract::State, Json, http::StatusCode};
-use chrono::{DateTime, Utc};
+use chrono::{Utc};
 
 use crate::pipeline::message::{PipelineMessage, AcceptedBundle};
 
@@ -15,7 +15,7 @@ pub async fn eth_send_bundle(
 
     let id = body.id.clone(); 
 
-    if body.params.len() != 1 { 
+    if body.params.len() != 1 {
         return SumbitOrderOutcome::RpcError(JsonRpcErrorResponse {
             jsonrpc: "2.0".into(),
             error: JsonRpcErrorBody {

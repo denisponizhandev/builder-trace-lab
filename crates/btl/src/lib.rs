@@ -54,7 +54,14 @@ impl App {
             axum::serve(listener, router).await
         });
 
-        let processor_handle = tokio::spawn(run_processor(rx, self.pool.clone()));
+        let processor_handle = tokio::spawn(
+            run_processor(
+                rx, 
+                self.pool.clone(), 
+                self.config.simulation_is_on, 
+                self.config.sleep_delay_ms
+            )
+        );
 
         tokio::select! {
             _ = signal::ctrl_c() => {
