@@ -1,16 +1,14 @@
-use tokio::sync::mpsc;
-
-use crate::pipeline::message::PipelineMessage;
+use crate::admission::bundle::BundleAdmission;
 
 #[derive(Clone)]
-pub struct HttpState {
-    pub tx: mpsc::Sender<PipelineMessage>
+pub struct AppState {
+    pub admission: BundleAdmission
 }
 
-impl HttpState {
-    pub fn new(tx: mpsc::Sender<PipelineMessage>) -> Self {
+impl AppState {
+    pub fn new(admission: BundleAdmission) -> Self {
         Self {
-            tx
+            admission
         }
     }
 }

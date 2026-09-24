@@ -1,15 +1,17 @@
-use axum::{extract::State, Json, http::StatusCode};
+use axum::{extract::State, Json};
 use chrono::{Utc};
 
-use crate::pipeline::message::{PipelineMessage, AcceptedBundle};
 use crate::domain::bundle::{parse_hex_u64, lab_bundle_hash};
+use crate::domain::job::BundleSimulationJob;
 
-use super::state::HttpState;
+use crate::admission::bundle::AdmitResult;
+
+use super::state::AppState;
 use super::jsonrpc_types::{JsonRpcRequest, SendBundleParams, JsonRpcSuccessResponse, SendBundleResult, JsonRpcErrorResponse, JsonRpcErrorBody, SumbitOrderOutcome};
 use super::validate::{validate_eth_send_bundle, RpcReject};
 
 pub async fn eth_send_bundle(
-    State(state): State<HttpState>, 
+    State(state): State<AppState>, 
     Json(mut body): Json<JsonRpcRequest<SendBundleParams>>
 ) -> SumbitOrderOutcome<SendBundleResult> {
 
@@ -93,29 +95,41 @@ pub async fn eth_send_bundle(
         }
     };
 
-    let msg = PipelineMessage::BundleAccepted(AcceptedBundle::new(
-        bundle_hash.clone(),
-        target_block,
-        tx_count,
-        Utc::now()
-    ));
+    let job = BundleSimulationJob {
+        bundle_hash: bundle_hash.clone(),
+        target_block: target_block,
+        tx_count: tx_count,
+        received_at: Utc::now(),
+        enqueued_at: None
+    };
 
-    // !!! the show begins here
-
-    if let Err(_) = state.tx.send(msg).await {
-        return SumbitOrderOutcome::RpcError(JsonRpcErrorResponse {
-            jsonrpc: "2.0".into(),
-            error: JsonRpcErrorBody {
-                code: -32603,
-                message: "internal error".into()
-            },
-            id: id.clone(),
-        });
+    match state.admission.admit(job).await {
+        AdmitResult::Accepted => {
+            return SumbitOrderOutcome::Ok(JsonRpcSuccessResponse {
+                jsonrpc: "2.0".into(),
+                result: SendBundleResult { bundle_hash },
+                id: id.clone(),
+            });
+        }
+        AdmitResult::RejectedQueueFull => {
+            return SumbitOrderOutcome::RpcError(JsonRpcErrorResponse {
+                jsonrpc: "2.0".into(),
+                error: JsonRpcErrorBody {
+                    code: -32603,
+                    message: "overload".into()
+                },
+                id: id.clone(),
+            });
+        }
+        AdmitResult::RejectedSubsystemDown => {
+            return SumbitOrderOutcome::RpcError(JsonRpcErrorResponse {
+                jsonrpc: "2.0".into(),
+                error: JsonRpcErrorBody {
+                    code: -32603,
+                    message: "internal system error".into()
+                },
+                id: id.clone(),
+            })
+        }
     }
-
-    SumbitOrderOutcome::Ok(JsonRpcSuccessResponse {
-        jsonrpc: "2.0".into(),
-        result: SendBundleResult { bundle_hash },
-        id: id.clone(),
-    })
 }
