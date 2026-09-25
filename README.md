@@ -5,11 +5,30 @@ A Rust **builder-style pipeline** lab: ingest order flow, route it through queue
 ## What’s implemented
 
 - HTTP **`eth_sendBundle`** (mock private bundles)
-- Pipeline: admission → simulation worker (sleep) → storage writer → Postgres
+- Pipeline: admission -> simulation worker (sleep) -> storage writer -> Postgres
 - Admission modes: **A** unbounded, **B** bounded + wait, **C** bounded + reject (`ADMISSION_POLICY`)
-- Prometheus: **`GET /metrics`** (counters, histograms, queue depth)
+- Prometheus: **`GET /metrics`** (labels `source=bundle`, `mode` = admission policy)
+- Per-bundle rows in **`bundles`** (timings + hash); graceful shutdown across HTTP / simulation / writer
 
-Planned next: Grafana, synthetic load, filtered mempool, SQL analysis.
+## What we measure today
+
+**Counters:** received -> accepted or rejected -> simulation started -> processed or failed (storage errors).
+
+**Gauges:** simulation queue depth & capacity (bounded modes), in-flight simulations, result queue depth. Unbounded mode does not expose simulation queue depth.
+
+**Histograms:** queue wait (receive -> simulation start), mock simulation duration, end-to-end (receive -> successful INSERT), HTTP handler time, DB write time.
+
+**Logs:** `bundle_hash` in structured logs - not in metric labels.
+
+Switch policy by restarting with `ADMISSION_POLICY=unbounded|wait|reject`.
+
+## Planned next
+
+- Grafana + Prometheus scrape off `/metrics`
+- Recorded experiment runs and time-series samples in Postgres
+- Synthetic load generator and repeatable A / B / C runs under load
+- SQL-backed analysis and written conclusions per admission mode
+- Second ingress: filtered public mempool, then combined bundle + mempool
 
 ## Stack
 
