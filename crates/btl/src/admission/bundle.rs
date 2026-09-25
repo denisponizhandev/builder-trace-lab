@@ -1,9 +1,8 @@
-use tokio::time::Instant;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 
 use crate::domain::job::BundleSimulationJob;
-use crate::metrics::bundle_metrics::BundleMetrics;
+use crate::metrics::app_metrics::AppMetrics;
 
 #[derive(Clone)]
 pub enum JobIngress {
@@ -37,22 +36,20 @@ pub enum AdmitResult {
 #[derive(Clone)]
 pub struct BundleAdmission {
     ingress: JobIngress,
-    metrics: BundleMetrics
+    metrics: AppMetrics
 }
 
 impl BundleAdmission {
-    pub fn new(ingress: JobIngress, metrics: BundleMetrics) -> Self {
+    pub fn new(ingress: JobIngress, metrics: AppMetrics) -> Self {
         BundleAdmission {
             ingress,
             metrics
         }
     }
 
-    pub async fn admit(&self, mut job: BundleSimulationJob) -> AdmitResult {
+    pub async fn admit(&self, job: BundleSimulationJob) -> AdmitResult {
         match &self.ingress {
             JobIngress::Unbounded(tx) => {
-                job.enqueued_at = Some(Instant::now());
-
                 if tx.send(job).is_err() {
                     return AdmitResult::RejectedSubsystemDown;
                 }
@@ -61,8 +58,6 @@ impl BundleAdmission {
                 AdmitResult::Accepted
             }
             JobIngress::BoundedWait(tx) => {
-                job.enqueued_at = Some(Instant::now());
-
                 if tx.send(job).await.is_err() {
                     return AdmitResult::RejectedSubsystemDown;
                 }
@@ -71,8 +66,6 @@ impl BundleAdmission {
                 AdmitResult::Accepted
             }
             JobIngress::BoundedReject(tx) => {
-                job.enqueued_at = Some(Instant::now());
-
                 match tx.try_send(job) {
                     Ok(()) => {
                         self.metrics.record_accepted();

@@ -27,7 +27,7 @@ use admission::bundle::{JobIngress, JobEgress, BundleAdmission};
 
 use pipeline::simulation::run_simulation_worker;
 use pipeline::writer::StorageWriter;
-use metrics::bundle_metrics::BundleMetrics;
+use metrics::app_metrics::AppMetrics;
 
 /// Max time to wait for HTTP stop and for each pipeline stage to drain queued work.
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -60,24 +60,39 @@ impl App {
         let res_channel_cap = self.config.result_queue_capacity;
         let sleep_delay_ms = self.config.sleep_delay_ms;
 
-        let (ingress, rx) = match in_app_policy {
+        let (ingress, rx, job_tx_for_gauges) = match in_app_policy {
             AdmissionPolicy::Unbounded => {
                 let (tx, rx) = mpsc::unbounded_channel::<BundleSimulationJob>();
-                (JobIngress::Unbounded(tx), JobEgress::Unbounded(rx))
+                (JobIngress::Unbounded(tx), JobEgress::Unbounded(rx), None)
             }
             AdmissionPolicy::WaitWhenFull => {
                 let (tx, rx) = mpsc::channel::<BundleSimulationJob>(channel_cap);
-                (JobIngress::BoundedWait(tx), JobEgress::BoundedWait(rx))
+                let gauge_tx = tx.clone();
+                (
+                    JobIngress::BoundedWait(tx),
+                    JobEgress::BoundedWait(rx),
+                    Some(gauge_tx),
+                )
             }
             AdmissionPolicy::RejectWhenFull => {
                 let (tx, rx) = mpsc::channel::<BundleSimulationJob>(channel_cap);
-                (JobIngress::BoundedReject(tx), JobEgress::BoundedReject(rx))
+                let gauge_tx = tx.clone();
+                (
+                    JobIngress::BoundedReject(tx),
+                    JobEgress::BoundedReject(rx),
+                    Some(gauge_tx),
+                )
             }
         };
 
-        let metrics = BundleMetrics::default();
+        let mode = admission_policy_label(in_app_policy);
+        let metrics = AppMetrics::new(mode);
+        if let Some(cap) = simulation_queue_capacity(in_app_policy, channel_cap) {
+            metrics.set_simulation_queue_capacity(cap);
+        }
+
         let admission = BundleAdmission::new(ingress, metrics.clone());
-        let state = AppState::new(admission);
+        let state = AppState::new(admission, metrics.clone());
         
         let router = build_router(state);
         let listener = tokio::net::TcpListener::bind(&self.config.http_bind).await?;
@@ -93,9 +108,25 @@ impl App {
         });
        
         let (result_tx, result_rx) = mpsc::channel::<BundleProcessingResult>(res_channel_cap);
-       
+        let result_tx_for_gauges = result_tx.clone();
+
+        let metrics_for_gauges = metrics.clone();
+        let gauge_handle = tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(1));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tick.tick().await;
+                if let Some(job_tx) = &job_tx_for_gauges {
+                    metrics_for_gauges.set_simulation_queue_depth(mpsc_sender_depth(job_tx));
+                }
+                metrics_for_gauges
+                    .set_result_queue_depth(mpsc_sender_depth(&result_tx_for_gauges));
+            }
+        });
+
+        let metrics_for_sim = metrics.clone();
         let simulation_handle = tokio::spawn(async move {
-            run_simulation_worker(rx, result_tx, sleep_delay_ms).await
+            run_simulation_worker(rx, result_tx, sleep_delay_ms, metrics_for_sim).await
         });
 
         let bundle_repo = BundleRepository::new(self.pool.clone());
@@ -108,13 +139,16 @@ impl App {
         signal::ctrl_c().await?;
         println!("shutdown requested");
 
+        // Drop gauge sender clones so job/result channels can close after HTTP drains admission.
+        gauge_handle.abort();
+        let _ = gauge_handle.await;
+
         if shutdown_tx.send(()).is_err() {
             eprintln!("http shutdown signal: receiver already gone");
         }
 
         // HTTP graceful stop drops AppState → admission senders close → simulation queue drains.
         join_with_timeout(http_handle, "http", SHUTDOWN_DRAIN_TIMEOUT).await;
-
         join_with_timeout(simulation_handle, "simulation", SHUTDOWN_DRAIN_TIMEOUT).await;
 
         match join_with_timeout(writer_handle, "storage writer", SHUTDOWN_DRAIN_TIMEOUT).await {
@@ -126,6 +160,28 @@ impl App {
         println!("shutdown complete");
 
         Ok(())
+    }
+}
+
+fn admission_policy_label(policy: AdmissionPolicy) -> &'static str {
+    match policy {
+        AdmissionPolicy::Unbounded => "unbounded",
+        AdmissionPolicy::WaitWhenFull => "wait",
+        AdmissionPolicy::RejectWhenFull => "reject",
+    }
+}
+
+/// Messages waiting in a bounded tokio mpsc buffer (Sender has no `len()`).
+fn mpsc_sender_depth<T>(tx: &mpsc::Sender<T>) -> i64 {
+    (tx.max_capacity() - tx.capacity()) as i64
+}
+
+fn simulation_queue_capacity(policy: AdmissionPolicy, channel_cap: usize) -> Option<i64> {
+    match policy {
+        AdmissionPolicy::Unbounded => None,
+        AdmissionPolicy::WaitWhenFull | AdmissionPolicy::RejectWhenFull => {
+            Some(channel_cap as i64)
+        }
     }
 }
 

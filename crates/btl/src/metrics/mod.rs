@@ -1,1 +1,1 @@
-pub mod bundle_metrics;
+pub mod app_metrics;
