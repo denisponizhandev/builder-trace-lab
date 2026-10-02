@@ -17,7 +17,7 @@ A Rust **builder-style pipeline** lab: ingest order flow, route it through queue
 
 **Counters:** received -> accepted or rejected -> simulation started -> processed or failed (storage errors).
 
-**Gauges:** simulation queue depth & capacity (bounded modes), in-flight simulations, result queue depth. Unbounded mode does not expose simulation queue depth.
+**Gauges:** simulation backlog depth (pending jobs before simulation start; all modes), capacity reference line (`SIMULATION_QUEUE_CAPACITY`; hard cap only for wait/reject), in-flight simulations, result queue depth.
 
 **Histograms:** queue wait (receive -> simulation start), mock simulation duration, end-to-end (receive -> successful INSERT), HTTP handler time, DB write time.
 
@@ -63,7 +63,7 @@ Prometheus scrapes `host.docker.internal:8080/metrics` — run `btl` on the host
 
 1. **Targets:** Prometheus → Status → Targets → job `btl` should be **UP**.
 2. **Datasource:** Grafana → Connections → Data sources → Prometheus → Save & test.
-3. **Dashboard:** open **Bundle pipeline**, set variable **mode** to your `ADMISSION_POLICY`, refresh every 10s.
+3. **Dashboard:** open **Bundle pipeline**, set variable **mode** to your `ADMISSION_POLICY`, zoom the time range to one vegeta run. Use **0. Run summary** (totals, reject %) and **0b. Compare policies** after all three modes are recorded.
 
 Full walkthrough (metrics → PromQL → panels):
 
@@ -81,7 +81,7 @@ After a few requests, panel **Bundle funnel** should show non-zero rates.
 Install [vegeta](https://github.com/tsenart/vegeta) (`go install github.com/tsenart/vegeta@latest`). With `btl` running:
 
 ```bash
-RATE=80 DURATION=60s MAX_WORKERS=50 ./scripts/vegeta-load.sh
+RATE=50 DURATION=60s MAX_WORKERS=40 ./scripts/vegeta-load.sh
 ```
 
 Watch **Bundle pipeline** in Grafana (`mode` = your `ADMISSION_POLICY`). Tune `RATE` above mock service rate (`SIMULATION_DELAY_MS` sets ~1 worker throughput).

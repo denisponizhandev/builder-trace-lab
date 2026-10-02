@@ -54,6 +54,7 @@ impl BundleAdmission {
                     return AdmitResult::RejectedSubsystemDown;
                 }
                 self.metrics.record_accepted();
+                self.metrics.inc_simulation_queue_depth();
 
                 AdmitResult::Accepted
             }
@@ -62,6 +63,7 @@ impl BundleAdmission {
                     return AdmitResult::RejectedSubsystemDown;
                 }
                 self.metrics.record_accepted();
+                self.metrics.inc_simulation_queue_depth();
 
                 AdmitResult::Accepted
             }
@@ -69,6 +71,7 @@ impl BundleAdmission {
                 match tx.try_send(job) {
                     Ok(()) => {
                         self.metrics.record_accepted();
+                        self.metrics.inc_simulation_queue_depth();
 
                         AdmitResult::Accepted
                     }

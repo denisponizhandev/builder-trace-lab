@@ -19,6 +19,7 @@ pub async fn run_simulation_worker(
     metrics: AppMetrics,
 ) {
     while let Some(job) = job_rx.recv().await {
+        metrics.dec_simulation_queue_depth();
         metrics.record_simulation_started();
         metrics.inc_simulation_in_flight();
 

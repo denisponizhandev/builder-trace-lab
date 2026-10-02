@@ -4,6 +4,26 @@ use prometheus::{
     Encoder, Histogram, HistogramOpts, IntCounter, IntGauge, Opts, Registry, TextEncoder,
 };
 
+/// Sub-second through multi-minute backlog (queue wait, end-to-end).
+const LATENCY_BUCKETS_SEC: &[f64] = &[
+    0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0, 90.0, 120.0,
+    180.0, 300.0,
+];
+
+/// HTTP handler: ms-scale through tens of seconds (wait policy).
+const HTTP_BUCKETS_SEC: &[f64] = &[
+    0.0005, 0.001, 0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0,
+];
+
+/// Mock simulation sleep (~100–300 ms in experiments).
+const SIMULATION_BUCKETS_SEC: &[f64] = &[
+    0.05, 0.075, 0.1, 0.125, 0.15, 0.175, 0.2, 0.25, 0.3, 0.4, 0.5, 1.0,
+];
+
+const DB_WRITE_BUCKETS_SEC: &[f64] = &[
+    0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1.0,
+];
+
 #[derive(Clone)]
 pub struct AppMetrics {
     inner: Arc<AppMetricsInner>,
@@ -58,35 +78,40 @@ impl AppMetrics {
         let result_queue_depth =
             register_gauge(&registry, "result_queue_depth", "result channel depth", mode);
 
-        let queue_wait_seconds = register_histogram(
+        let queue_wait_seconds = register_histogram_with_buckets(
             &registry,
             "queue_wait_seconds",
             "time from job receive to simulation start",
             mode,
+            LATENCY_BUCKETS_SEC,
         );
-        let simulation_duration_seconds = register_histogram(
+        let simulation_duration_seconds = register_histogram_with_buckets(
             &registry,
             "simulation_duration_seconds",
             "mock simulation work duration",
             mode,
+            SIMULATION_BUCKETS_SEC,
         );
-        let bundle_end_to_end_seconds = register_histogram(
+        let bundle_end_to_end_seconds = register_histogram_with_buckets(
             &registry,
             "bundle_end_to_end_seconds",
             "received_at to successful storage",
             mode,
+            LATENCY_BUCKETS_SEC,
         );
-        let http_response_duration_seconds = register_histogram(
+        let http_response_duration_seconds = register_histogram_with_buckets(
             &registry,
             "http_response_duration_seconds",
             "eth_sendBundle handler duration",
             mode,
+            HTTP_BUCKETS_SEC,
         );
-        let db_write_duration_seconds = register_histogram(
+        let db_write_duration_seconds = register_histogram_with_buckets(
             &registry,
             "db_write_duration_seconds",
             "single bundle INSERT duration",
             mode,
+            DB_WRITE_BUCKETS_SEC,
         );
 
         Self {
@@ -159,6 +184,14 @@ impl AppMetrics {
         self.inner.simulation_queue_depth.set(depth);
     }
 
+    pub fn inc_simulation_queue_depth(&self) {
+        self.inner.simulation_queue_depth.inc();
+    }
+
+    pub fn dec_simulation_queue_depth(&self) {
+        self.inner.simulation_queue_depth.dec();
+    }
+
     pub fn set_simulation_queue_capacity(&self, capacity: i64) {
         self.inner.simulation_queue_capacity.set(capacity);
     }
@@ -205,11 +238,18 @@ fn register_gauge(registry: &Registry, name: &str, help: &str, mode: &str) -> In
     gauge
 }
 
-fn register_histogram(registry: &Registry, name: &str, help: &str, mode: &str) -> Histogram {
+fn register_histogram_with_buckets(
+    registry: &Registry,
+    name: &str,
+    help: &str,
+    mode: &str,
+    buckets: &[f64],
+) -> Histogram {
     let histogram = Histogram::with_opts(
         HistogramOpts::new(name, help)
             .const_label("source", "bundle")
-            .const_label("mode", mode),
+            .const_label("mode", mode)
+            .buckets(buckets.to_vec()),
     )
     .expect("histogram opts");
     registry

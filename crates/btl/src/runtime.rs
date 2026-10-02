@@ -22,7 +22,6 @@ const GAUGE_TICK_SECS: u64 = 1;
 pub struct JobChannels {
     pub ingress: JobIngress,
     pub egress: JobEgress,
-    pub job_tx_for_gauges: Option<mpsc::Sender<BundleSimulationJob>>,
 }
 
 pub fn build_job_channels(policy: AdmissionPolicy, channel_cap: usize) -> JobChannels {
@@ -32,25 +31,20 @@ pub fn build_job_channels(policy: AdmissionPolicy, channel_cap: usize) -> JobCha
             JobChannels {
                 ingress: JobIngress::Unbounded(tx),
                 egress: JobEgress::Unbounded(rx),
-                job_tx_for_gauges: None,
             }
         }
         AdmissionPolicy::WaitWhenFull => {
             let (tx, rx) = mpsc::channel::<BundleSimulationJob>(channel_cap);
-            let gauge_tx = tx.clone();
             JobChannels {
                 ingress: JobIngress::BoundedWait(tx),
                 egress: JobEgress::BoundedWait(rx),
-                job_tx_for_gauges: Some(gauge_tx),
             }
         }
         AdmissionPolicy::RejectWhenFull => {
             let (tx, rx) = mpsc::channel::<BundleSimulationJob>(channel_cap);
-            let gauge_tx = tx.clone();
             JobChannels {
                 ingress: JobIngress::BoundedReject(tx),
                 egress: JobEgress::BoundedReject(rx),
-                job_tx_for_gauges: Some(gauge_tx),
             }
         }
     }
@@ -58,9 +52,8 @@ pub fn build_job_channels(policy: AdmissionPolicy, channel_cap: usize) -> JobCha
 
 pub fn build_metrics(policy: AdmissionPolicy, channel_cap: usize) -> AppMetrics {
     let metrics = AppMetrics::new(admission_policy_label(policy));
-    if let Some(cap) = simulation_queue_capacity_gauge(policy, channel_cap) {
-        metrics.set_simulation_queue_capacity(cap);
-    }
+    metrics.set_simulation_queue_capacity(channel_cap as i64);
+    metrics.set_simulation_queue_depth(0);
     metrics
 }
 
@@ -98,16 +91,12 @@ pub async fn spawn_stages(
         mpsc::channel::<BundleProcessingResult>(config.result_queue_capacity);
     let result_tx_for_gauges = result_tx.clone();
 
-    let job_tx_for_gauges = channels.job_tx_for_gauges;
     let metrics_for_gauges = metrics.clone();
     let gauge = tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(GAUGE_TICK_SECS));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tick.tick().await;
-            if let Some(job_tx) = &job_tx_for_gauges {
-                metrics_for_gauges.set_simulation_queue_depth(mpsc_sender_depth(job_tx));
-            }
             metrics_for_gauges
                 .set_result_queue_depth(mpsc_sender_depth(&result_tx_for_gauges));
         }
@@ -165,15 +154,6 @@ fn admission_policy_label(policy: AdmissionPolicy) -> &'static str {
 
 fn mpsc_sender_depth<T>(tx: &mpsc::Sender<T>) -> i64 {
     (tx.max_capacity() - tx.capacity()) as i64
-}
-
-fn simulation_queue_capacity_gauge(policy: AdmissionPolicy, channel_cap: usize) -> Option<i64> {
-    match policy {
-        AdmissionPolicy::Unbounded => None,
-        AdmissionPolicy::WaitWhenFull | AdmissionPolicy::RejectWhenFull => {
-            Some(channel_cap as i64)
-        }
-    }
 }
 
 async fn join_with_timeout<T>(handle: JoinHandle<T>, stage: &str, timeout: Duration) -> Option<T> {
